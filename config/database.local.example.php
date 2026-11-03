@@ -14,9 +14,9 @@
  * That is an explicit choice made here, never a silent fallback.
  */
 return [
-    'user' => 'disinfentry',
-    'pass' => 'change-me',
-    // 'host' => '127.0.0.1',
-    // 'port' => 3306,
-    // 'name' => 'disinfentry',
+    'host' => '127.0.0.1',
+    'port' => 3306,
+    'name' => 'disinfentryv1',
+    'user' => 'root',
+    'pass' => '',
 ];
