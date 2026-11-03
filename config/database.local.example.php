@@ -18,5 +18,5 @@ return [
     'port' => 3306,
     'name' => 'disinfentryv1',
     'user' => 'root',
-    'pass' => '',
+    'pass' => 'ppdBZfIaWyLFKrwuSVqCIuLDHGJSuFFw',
 ];
