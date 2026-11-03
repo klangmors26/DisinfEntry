@@ -17,5 +17,5 @@ return [
     'provider' => 'resend',                                  // 'resend' or 'brevo'
     'api_key'  => 'PASTE-YOUR-API-KEY-HERE',
     'from'     => 'DisinfEntry <noreply@your-verified-domain.example>',
-    // 'base_url' => 'http://localhost/DisinfEntry',         // optional: adds a sign-in link
+    // 'base_url' => 'https://my-disinfentry-production.up.railway.app',         // optional: adds a sign-in link
 ];
