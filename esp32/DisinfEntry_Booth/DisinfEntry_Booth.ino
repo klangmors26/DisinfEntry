@@ -4,7 +4,7 @@
 
   Detection: HC-SR04 ultrasonic distance sensor (50cm range)
   Safety: MLX90614 infrared temperature sensor
-    - If detected person's temperature is >= the fever threshold, the pump and
+    - If detected person's temperature is ABOVE the fever threshold, the pump and
       door sequence is BLOCKED (access denied, door stays closed).
     - System waits until the person leaves range before resetting.
 
@@ -1695,7 +1695,11 @@ void loop() {
             Serial.println(">> ACCESS DENIED: Temperature reading failed. Check the MLX90614.");
             stateStartTime = now;
             setState(ACCESS_DENIED, now);
-          } else if (objTemp >= feverThresholdC) {
+          } else if (lround(objTemp * 10.0) > lround(feverThresholdC * 10.0)) {
+            // Compared in whole tenths of a degree, the same resolution the server stores and
+            // displays: a reading AT or BELOW the threshold (e.g. 37.8 C) is granted, and only a
+            // reading ABOVE it is denied. (Raw float comparison would deny a reading that the
+            // dashboard then shows as exactly 37.8 C.)
             screeningFailed = false;
             Serial.println(">> ACCESS DENIED: Temperature too high. Pump and door blocked.");
             stateStartTime = now;
