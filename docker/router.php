@@ -74,6 +74,12 @@ if (getenv('DISINFENTRY_BEHIND_PROXY') === '1'
     header('Strict-Transport-Security: max-age=31536000');
 }
 
+// The site root opens the public homepage (index.html), matching DirectoryIndex in
+// .htaccess. The console itself is index.php, which every app link names explicitly.
+if ($clean === '/' && is_file(__DIR__ . '/../index.html')) {
+    $clean = '/index.html';
+}
+
 $target = __DIR__ . '/..' . $clean;
 
 // Static files are served here rather than left to the server: the built-in server
@@ -103,7 +109,7 @@ if (is_file($target) && !preg_match('/\.php\d?$/i', $target)) {
     // Page links carry ?v=<mtime>, so a changed file gets a new URL; a day is safe.
     // The service worker, manifest and offline page are fetched by fixed URL with no ?v=,
     // so they must be revalidated or an update would not reach installed apps for a day.
-    $noStore = in_array(substr($clean, 1), ['sw.js', 'manifest.json', 'offline.html'], true);
+    $noStore = in_array(substr($clean, 1), ['sw.js', 'manifest.json', 'offline.html', 'index.html'], true);
     header('Cache-Control: ' . ($noStore ? 'no-cache' : 'public, max-age=86400'));
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'HEAD') {
         readfile($real);

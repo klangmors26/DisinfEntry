@@ -58,7 +58,7 @@
 
   # Mobile app files are fetched by fixed URL (no ?v= stamp): always revalidate them
   # so an update reaches installed apps on their next launch.
-  <FilesMatch "^(sw\.js|manifest\.json|offline\.html)$">
+  <FilesMatch "^(sw\.js|manifest\.json|offline\.html|index\.html)$">
     Header set Cache-Control "no-cache"
   </FilesMatch>
 </IfModule>
@@ -66,4 +66,4 @@
 # Hide directory listings.
 Options -Indexes
 
-DirectoryIndex index.php login.php
+DirectoryIndex index.html index.php login.php

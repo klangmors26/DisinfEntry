@@ -14,7 +14,10 @@ declare(strict_types=1);
 <meta name="apple-mobile-web-app-title" content="DisinfEntry">
 <meta name="application-name" content="DisinfEntry">
 <meta name="format-detection" content="telephone=no">
-<link rel="manifest" href="<?= url('manifest.json') ?>">
+<?php /* use-credentials: browsers fetch the manifest without cookies by default, and hosts with a
+   cookie-based browser check (InfinityFree's aes.js) then answer with an HTML challenge page,
+   which makes the app impossible to install. Same-origin, so this only adds our own cookies. */ ?>
+<link rel="manifest" href="<?= url('manifest.json') ?>" crossorigin="use-credentials">
 <link rel="icon" type="image/png" sizes="32x32" href="<?= url('assets/icons/favicon-32.png') ?>">
 <link rel="apple-touch-icon" href="<?= url('assets/icons/apple-touch-icon.png') ?>">
 <meta name="sw-url" content="<?= e(url('sw.js')) ?>">

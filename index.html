@@ -209,7 +209,7 @@
       <a href="#how">How it works</a>
       <a href="#install">Get the app</a>
     </nav>
-    <a class="signin" href="https://disinfentry-production.up.railway.app/">Sign in</a>
+    <a class="signin" href="login.php" data-app-link>Sign in</a>
   </div>
 </header>
 
@@ -224,7 +224,7 @@
         from your phone.
       </p>
       <div class="cta">
-        <a class="btn btn-primary" href="https://disinfentry-production.up.railway.app/">
+        <a class="btn btn-primary" href="login.php" data-app-link>
           Open DisinfEntry
           <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
         </a>
@@ -363,7 +363,7 @@
       <div class="final">
         <h2>Ready to check your farm gate?</h2>
         <p>Sign in to see today's entries, alerts and reports.</p>
-        <a class="btn btn-primary" href="https://disinfentry-production.up.railway.app/">
+        <a class="btn btn-primary" href="login.php" data-app-link>
           Open DisinfEntry
           <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
         </a>
@@ -379,6 +379,16 @@
   </div>
 </footer>
 
-<script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+<script>
+  document.getElementById('year').textContent = new Date().getFullYear();
+  // Served by the app itself, "login.php" opens its sign-in page (or the dashboard when
+  // already signed in). On static hosting such as GitHub Pages there is no PHP, so send
+  // the buttons to the live app instead.
+  if (/\.github\.io$/.test(location.hostname) || location.protocol === 'file:') {
+    document.querySelectorAll('[data-app-link]').forEach(function (a) {
+      a.href = 'https://disinfentry-production.up.railway.app/login.php';
+    });
+  }
+</script>
 </body>
 </html>
