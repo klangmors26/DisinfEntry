@@ -55,6 +55,12 @@
   # banner is stripped on the way out instead. Same result: no PHP version
   # advertised to anyone fingerprinting the host.
   Header always unset X-Powered-By
+
+  # Mobile app files are fetched by fixed URL (no ?v= stamp): always revalidate them
+  # so an update reaches installed apps on their next launch.
+  <FilesMatch "^(sw\.js|manifest\.json|offline\.html)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
 </IfModule>
 
 # Hide directory listings.

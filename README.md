@@ -160,6 +160,46 @@ purgeable by cut-off date.
 
 ---
 
+## Mobile app
+
+The console is a Progressive Web App: it installs on Android and iPhone home screens and
+opens full-screen like a native app, from this same codebase (no separate build).
+
+| Piece | File |
+|-------|------|
+| App manifest (name, icons, colours, home-screen shortcuts) | `manifest.json` |
+| Service worker (fast start, offline screen) | `sw.js`, `offline.html` |
+| Install button, phone alerts, vibration | `assets/js/pwa.js` |
+| Home-screen icons | `assets/icons/` |
+| Mobile `<head>` tags | `includes/pwa_head.php` |
+
+On phones the sidebar is replaced by a bottom tab bar (Home · Live · Entries · Alerts · More).
+
+**Installing.** Phones only install apps from an **HTTPS** address (or `localhost`). A LAN
+address such as `http://192.168.1.10/DisinfEntry` opens as a normal website, without the
+install option or the service worker. Use the HTTPS deployment (see `RAILWAY.md`).
+
+- **Android (Chrome):** open the site → user menu → **Install app** (or ⋮ → *Install app*).
+- **iPhone/iPad (Safari):** Share → **Add to Home Screen**.
+
+**Phone alerts.** User menu → **Phone alerts** asks for notification permission. While the
+app is open or in the background, high-temperature, denied-entry and booth-offline alerts appear
+in the status bar and the phone vibrates. These come from the app's own polling, so a phone
+that has fully closed the app (or put it to sleep) gets nothing until the app is opened again.
+Alerts that wake a closed app need Web Push (VAPID keys + a push sender in the API), which is
+not implemented.
+
+**Caching.** Only static files (CSS, JS, icons, CDN libraries) are cached. Pages and `api/`
+responses are never cached, so the app never shows stale readings as if they were live. After
+changing `sw.js` or `offline.html`, bump `VERSION` at the top of `sw.js`.
+
+**Play Store / APK.** The installed PWA can be wrapped as an Android app (Trusted Web
+Activity) without code changes: enter the HTTPS URL at <https://www.pwabuilder.com>, choose
+*Android*, and download the signed package. Publishing also needs a
+`.well-known/assetlinks.json` file from PWABuilder, served at the domain root.
+
+---
+
 ## Temperature rules
 
 The **booth** decides, because it is the only thing that can hold the door shut and it must

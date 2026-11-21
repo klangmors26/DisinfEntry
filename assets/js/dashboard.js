@@ -21,13 +21,13 @@
 
   Chart.defaults.font.family = '"Segoe UI", system-ui, sans-serif';
   Chart.defaults.font.size = 11;
-  Chart.defaults.color = '#64748b';
+  App.applyChartTheme();   // theme-aware text, grid and doughnut-edge colours
   Chart.defaults.plugins.legend.labels.usePointStyle = true;
   Chart.defaults.plugins.legend.labels.boxWidth = 8;
   Chart.defaults.plugins.legend.labels.padding = 14;
 
   const gridScale = (extra = {}) => ({
-    grid: { color: '#eef2f7', drawBorder: false },
+    grid: { color: () => App.cssVar('--chart-grid'), drawBorder: false },
     ticks: { precision: 0 },
     ...extra,
   });

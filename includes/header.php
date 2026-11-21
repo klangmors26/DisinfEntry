@@ -27,21 +27,22 @@ $navItems   = [
 ];
 ?>
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="light">
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title><?= e($PAGE_TITLE) ?> · <?= e($sysName) ?></title>
 <meta name="csrf-token" content="<?= e(csrf_token()) ?>">
 <meta name="base-url" content="<?= e(BASE_URL) ?>">
 <meta name="temp-threshold" content="<?= e(setting('temperature_threshold', '37.8')) ?>">
 <meta name="low-temp" content="<?= e((string) SUSPECT_LOW_TEMP_C) ?>">
 <meta name="refresh-interval" content="<?= e(setting('refresh_interval', '3')) ?>">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128737;</text></svg>">
+<?php require __DIR__ . '/pwa_head.php'; ?>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet" integrity="sha384-XGjxtQfXaH2tnPFa9x+ruJTuLE3Aa6LhHSWRr1XeTyhezb4abCG4ccI5AkVDxqC+" crossorigin="anonymous">
 <link href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css" rel="stylesheet" integrity="sha384-ok3J6xA9oQqai5C9ytYveFsBeKgoGk4T+NExsr6hoIKjZdv9SJcmx2mafwUWRNf9" crossorigin="anonymous">
 <link href="<?= asset_url('assets/css/style.css') ?>" rel="stylesheet">
+<link href="<?= asset_url('assets/css/mobile.css') ?>" rel="stylesheet">
 </head>
 <body>
 
@@ -81,6 +82,9 @@ $navItems   = [
     </nav>
 
     <div class="sidebar-footer">
+      <button type="button" class="btn btn-sm btn-install w-100 mb-2 d-none" data-pwa-install>
+        <i class="bi bi-phone me-1"></i>Install mobile app
+      </button>
       <div class="device-pill" id="deviceStatusPill">
         <span class="status-dot bg-secondary"></span>
         <span class="small">Checking booth…</span>
@@ -104,6 +108,11 @@ $navItems   = [
       </div>
 
       <div class="topbar-actions">
+        <!-- Light / dark quick switch -->
+        <button class="btn btn-light btn-icon" type="button" data-theme-toggle title="Switch to dark mode" aria-label="Switch theme">
+          <i class="bi bi-moon-stars"></i>
+        </button>
+
         <!-- Notification bell -->
         <div class="dropdown">
           <button class="btn btn-light btn-icon position-relative" data-bs-toggle="dropdown"
@@ -128,7 +137,7 @@ $navItems   = [
 
         <!-- User menu -->
         <div class="dropdown">
-          <button class="btn btn-light user-chip" data-bs-toggle="dropdown" aria-expanded="false">
+          <button class="btn btn-light user-chip" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
             <span class="avatar"><?= e(strtoupper(substr((string) $me['full_name'], 0, 1))) ?></span>
             <span class="d-none d-sm-inline text-start">
               <span class="d-block fw-semibold lh-1"><?= e($me['full_name']) ?></span>
@@ -140,6 +149,18 @@ $navItems   = [
             <li><h6 class="dropdown-header"><?= e($me['employee_id']) ?></h6></li>
             <li><a class="dropdown-item" href="<?= url('profile.php') ?>"><i class="bi bi-person me-2"></i>My Profile</a></li>
             <li><a class="dropdown-item" href="<?= url('profile.php#password') ?>"><i class="bi bi-key me-2"></i>Change Password</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li class="px-3 py-2">
+              <div class="small text-muted fw-semibold mb-2"><i class="bi bi-circle-half me-2"></i>Appearance</div>
+              <div class="theme-switch" role="group" aria-label="Theme">
+                <button type="button" data-theme-set="light"><i class="bi bi-sun"></i>Light</button>
+                <button type="button" data-theme-set="dark"><i class="bi bi-moon-stars"></i>Dark</button>
+                <button type="button" data-theme-set="auto"><i class="bi bi-phone"></i>Auto</button>
+              </div>
+            </li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item d-none" href="#" data-pwa-install><i class="bi bi-phone me-2"></i>Install app</a></li>
+            <li><a class="dropdown-item" href="#" data-pwa-notify><i class="bi bi-bell-slash me-2"></i><span data-label>Phone alerts: off</span></a></li>
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item text-danger" href="<?= url('logout.php') ?>"><i class="bi bi-box-arrow-right me-2"></i>Logout</a></li>
           </ul>

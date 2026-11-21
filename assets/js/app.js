@@ -143,6 +143,7 @@ const App = (() => {
       tempEl.style.display = 'none';
     }
 
+    window.PWA?.vibrate(severity === 'warning' ? [200] : [300, 120, 300, 120, 300]);
     bootstrap.Modal.getOrCreateInstance(modalEl).show();
   }
 
@@ -234,11 +235,17 @@ const App = (() => {
   }
 
   function setBadge(count) {
-    [document.getElementById('notifBadge'), document.getElementById('navNotifBadge')].forEach((el) => {
+    ['notifBadge', 'navNotifBadge', 'bottomNotifBadge'].forEach((id) => {
+      const el = document.getElementById(id);
       if (!el) return;
       el.textContent = count > 99 ? '99+' : count;
       el.classList.toggle('d-none', count === 0);
     });
+    // Unread count on the installed app's home-screen icon (Android/desktop Chrome, iOS 16.4+).
+    try {
+      if (count > 0) navigator.setAppBadge?.(count)?.catch(() => {});
+      else navigator.clearAppBadge?.()?.catch(() => {});
+    } catch { /* unsupported */ }
   }
 
   async function pollNotifications() {
@@ -256,6 +263,17 @@ const App = (() => {
         playSound(critical ? 'alert' : 'info');
         fresh.slice(0, 3).forEach((n) =>
           toast(n.message, n.severity === 'danger' ? 'danger' : n.severity === 'warning' ? 'warning' : 'info', n.title));
+
+        if (critical) window.PWA?.vibrate([300, 120, 300]);
+        // Status-bar / lock-screen alert while the app is in the background.
+        if (document.hidden) {
+          fresh.filter((n) => n.severity === 'danger' || n.severity === 'warning').slice(0, 3).forEach((n) =>
+            window.PWA?.notify(n.title, n.message, {
+              tag: `disinf-${n.id}`,
+              critical: n.severity === 'danger',
+              url: 'notifications.php',
+            }));
+        }
       }
       notifPrimed = true;
     } catch {
@@ -280,6 +298,10 @@ const App = (() => {
       if (alerted !== outage) {
         try { sessionStorage.setItem(key, outage); } catch { /* storage blocked */ }
         playSound('alert');
+        if (document.hidden) {
+          window.PWA?.notify('Booth Offline', `${d.device_name} has stopped reporting. Nobody is being screened.`,
+            { tag: 'disinf-booth-offline', critical: true, url: 'live.php' });
+        }
         alertPopup({
           title: 'Booth Offline',
           message: `${d.device_name} has not reported since ${d.last_seen ? timeAgo(d.last_seen) : 'it was registered'}. ` +
@@ -338,6 +360,7 @@ const App = (() => {
     const close = () => { sidebar?.classList.remove('show'); backdrop?.classList.remove('show'); };
 
     document.getElementById('sidebarToggle')?.addEventListener('click', open);
+    document.getElementById('bottomMenuBtn')?.addEventListener('click', open);
     document.querySelector('.sidebar-close')?.addEventListener('click', close);
     backdrop?.addEventListener('click', close);
 
@@ -378,8 +401,72 @@ const App = (() => {
 
   /* ---------------- Boot ---------------- */
 
+  /* ---------------- Theme-aware charts ---------------- */
+
+  const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  // Chart.js draws on a canvas, so CSS cannot recolour it: push the theme's colours into
+  // Chart.defaults and redraw every chart on the page whenever the theme changes.
+  function applyChartTheme() {
+    if (!window.Chart) return;
+    Chart.defaults.color = cssVar('--muted') || '#64748b';
+    Chart.defaults.borderColor = cssVar('--chart-grid') || '#eef2f7';
+    Chart.defaults.elements.arc.borderColor = cssVar('--surface') || '#fff';
+    Object.values(Chart.instances || {}).forEach((chart) => chart.update('none'));
+  }
+  document.addEventListener('themechange', applyChartTheme);
+
+  /* ---------------- Phone layout helpers ---------------- */
+
+  // On phones, mobile.css shows each table row as a list card with "label  value" lines.
+  // The labels come from the column headers; rows are re-rendered by AJAX and DataTables,
+  // so cells are labelled whenever a tbody changes.
+  function labelTableCells() {
+    document.querySelectorAll('.content table.table').forEach((table) => {
+      const heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim());
+      table.querySelectorAll('tbody > tr').forEach((tr) => {
+        const cells = tr.children;
+        tr.classList.toggle('row-empty', cells.length === 1 && heads.length > 1);
+        [...cells].forEach((td, i) => {
+          const label = /^actions?$/i.test(heads[i] || '') ? '' : (heads[i] || '');
+          if (td.getAttribute('data-label') !== label) td.setAttribute('data-label', label);
+        });
+      });
+    });
+  }
+
+  function initMobileLayout() {
+    labelTableCells();
+    const content = document.querySelector('.content');
+    if (content) {
+      let queued = false;
+      new MutationObserver(() => {
+        if (queued) return;
+        queued = true;
+        requestAnimationFrame(() => { queued = false; labelTableCells(); });
+      }).observe(content, { childList: true, subtree: true });
+    }
+
+    // Filter panels start collapsed on phones behind a "Filters" button.
+    document.querySelectorAll('.filter-bar').forEach((bar) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'filter-toggle';
+      btn.innerHTML = '<i class="bi bi-sliders"></i><span>Filters</span><i class="bi bi-chevron-down"></i>';
+      btn.addEventListener('click', () => bar.classList.toggle('open'));
+      bar.prepend(btn);
+    });
+
+    // Close the "More" sheet when one of its items is tapped.
+    document.querySelectorAll('#sidebar .nav-link').forEach((a) => a.addEventListener('click', () => {
+      document.getElementById('sidebar')?.classList.remove('show');
+      document.getElementById('sidebarBackdrop')?.classList.remove('show');
+    }));
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     initChrome();
+    initMobileLayout();
     if (document.getElementById('notifList')) {
       pollNotifications();
       setInterval(pollNotifications, 10000);
@@ -395,6 +482,7 @@ const App = (() => {
     tempBadge, accessBadge, disinfectionBadge, timeAgo,
     THRESHOLD, REFRESH, CSRF, BASE,
     refreshNotifications: pollNotifications,
+    cssVar, applyChartTheme,
   };
 })();
 

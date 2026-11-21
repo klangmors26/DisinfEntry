@@ -18,7 +18,7 @@
 
   Chart.defaults.font.family = '"Segoe UI", system-ui, sans-serif';
   Chart.defaults.font.size = 11;
-  Chart.defaults.color = '#64748b';
+  App.applyChartTheme();   // theme-aware text, grid and doughnut-edge colours
   Chart.defaults.plugins.legend.labels.usePointStyle = true;
   Chart.defaults.plugins.legend.labels.boxWidth = 8;
 
@@ -96,7 +96,7 @@
         plugins: { legend: { position: 'top', align: 'end' } },
         scales: {
           x: { stacked: true, grid: { display: false } },
-          y: { stacked: true, beginAtZero: true, grid: { color: '#eef2f7' }, ticks: { precision: 0 } },
+          y: { stacked: true, beginAtZero: true, grid: { color: () => App.cssVar('--chart-grid') }, ticks: { precision: 0 } },
           y1: {
             position: 'right',
             beginAtZero: false,
@@ -131,7 +131,7 @@
         maintainAspectRatio: false,
         plugins: { legend: { display: false } },
         scales: {
-          x: { beginAtZero: true, grid: { color: '#eef2f7' }, ticks: { precision: 0 } },
+          x: { beginAtZero: true, grid: { color: () => App.cssVar('--chart-grid') }, ticks: { precision: 0 } },
           y: { grid: { display: false } },
         },
       },

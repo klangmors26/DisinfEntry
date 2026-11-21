@@ -8,6 +8,30 @@
   </div>
 </div>
 
+<!-- Bottom tab bar (phones / installed app) -->
+<?php $ACTIVE = $ACTIVE ?? ''; ?>
+<nav class="bottom-nav d-lg-none" aria-label="Main">
+  <a href="<?= url('index.php') ?>" class="<?= $ACTIVE === 'dashboard' ? 'active' : '' ?>">
+    <i class="bi bi-grid<?= $ACTIVE === 'dashboard' ? '-fill' : '' ?>"></i><span>Home</span>
+  </a>
+  <a href="<?= url('live.php') ?>" class="<?= $ACTIVE === 'live' ? 'active' : '' ?>">
+    <i class="bi bi-broadcast"></i><span>Live</span>
+  </a>
+  <a href="<?= url('entries.php') ?>" class="<?= $ACTIVE === 'entries' ? 'active' : '' ?>">
+    <i class="bi bi-list-check"></i><span>Entries</span>
+  </a>
+  <a href="<?= url('notifications.php') ?>" class="<?= $ACTIVE === 'notifs' ? 'active' : '' ?>">
+    <span class="position-relative d-inline-block">
+      <i class="bi bi-bell<?= $ACTIVE === 'notifs' ? '-fill' : '' ?>"></i>
+      <span class="bottom-badge badge rounded-pill bg-danger d-none" id="bottomNotifBadge">0</span>
+    </span>
+    <span>Alerts</span>
+  </a>
+  <button type="button" id="bottomMenuBtn" class="<?= in_array($ACTIVE, ['exits', 'reports', 'settings', 'users', 'audit'], true) ? 'active' : '' ?>">
+    <i class="bi bi-list"></i><span>More</span>
+  </button>
+</nav>
+
 <!-- Toast container -->
 <div class="toast-container position-fixed top-0 end-0 p-3" id="toastArea" style="z-index:1090"></div>
 

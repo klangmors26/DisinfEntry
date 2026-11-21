@@ -95,12 +95,16 @@ if (is_file($target) && !preg_match('/\.php\d?$/i', $target)) {
         'png' => 'image/png',  'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'gif' => 'image/gif',
         'webp' => 'image/webp', 'ico' => 'image/x-icon', 'svg' => 'image/svg+xml',
         'woff' => 'font/woff', 'woff2' => 'font/woff2', 'ttf' => 'font/ttf', 'txt' => 'text/plain; charset=utf-8',
+        'html' => 'text/html; charset=utf-8', 'webmanifest' => 'application/manifest+json',
     ];
     $ext = strtolower(pathinfo($real, PATHINFO_EXTENSION));
     header('Content-Type: ' . ($types[$ext] ?? 'application/octet-stream'));
     header('Content-Length: ' . (string) filesize($real));
     // Page links carry ?v=<mtime>, so a changed file gets a new URL; a day is safe.
-    header('Cache-Control: public, max-age=86400');
+    // The service worker, manifest and offline page are fetched by fixed URL with no ?v=,
+    // so they must be revalidated or an update would not reach installed apps for a day.
+    $noStore = in_array(substr($clean, 1), ['sw.js', 'manifest.json', 'offline.html'], true);
+    header('Cache-Control: ' . ($noStore ? 'no-cache' : 'public, max-age=86400'));
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'HEAD') {
         readfile($real);
     }
