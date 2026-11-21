@@ -14,7 +14,8 @@ require_once __DIR__ . '/../includes/auth.php';
 api_require_admin();
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    $s = all_settings();
+    // The booth's WiFi password goes to the booth only, never back to a browser.
+    $s = array_diff_key(all_settings(), array_flip(BOOTH_WIFI_SECRET_KEYS));
     json_response([
         'success'   => true,
         'settings'  => $s,
@@ -43,6 +44,36 @@ if ($action === 'remove_logo') {
     set_setting('logo', '');
     audit('Removed the system logo', 'System Settings');
     json_response(['success' => true, 'message' => 'Logo removed.']);
+}
+
+/* --------------------------------------------------- booth WiFi
+ * Delivered to the booth on its next sync (it must still be online to receive it). The
+ * booth keeps its current network as a fallback, so a network it cannot see yet - the
+ * site it is about to be moved to - does not take it offline.
+ */
+if ($action === 'set_booth_wifi') {
+    $ssid = trim((string) ($_POST['wifi_ssid'] ?? ''));
+    $pass = (string) ($_POST['wifi_password'] ?? '');
+
+    if ($ssid === '' || strlen($ssid) > 32) {
+        json_response(['success' => false, 'message' => 'Enter the WiFi name (1 to 32 characters).'], 422);
+    }
+    if ($pass !== '' && (strlen($pass) < 8 || strlen($pass) > 63)) {
+        json_response(['success' => false, 'message' => 'A WiFi password is 8 to 63 characters (leave it empty for an open network).'], 422);
+    }
+
+    // Strictly increasing, so a re-send of the same network still counts as new.
+    $version = max(time(), (int) setting('booth_wifi_version', '0') + 1);
+    set_setting('booth_wifi_ssid', $ssid);
+    set_setting('booth_wifi_pass', $pass);
+    set_setting('booth_wifi_version', (string) $version);
+    audit(sprintf('Sent new WiFi "%s" to the booth', $ssid), 'System Settings');
+
+    json_response([
+        'success' => true,
+        'message' => 'Saved. The booth picks up the new WiFi on its next sync (within a minute while it is online).',
+        'version' => $version,
+    ]);
 }
 
 if ($action !== 'save') {

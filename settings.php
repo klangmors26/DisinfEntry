@@ -397,4 +397,70 @@ require __DIR__ . '/includes/header.php';
   </div>
 </form>
 
+<?php
+/* Booth WiFi: its own form, so "Save Settings" never resends the WiFi. The password is
+   never printed back into the page. */
+$wifiVersion = (int) ($s['booth_wifi_version'] ?? 0);
+$wifiSent    = (string) ($s['booth_wifi_ssid'] ?? '');
+$wifiAdopted = (string) ($s['booth_wifi_adopted_v'] ?? '');
+$wifiNow     = (string) ($s['booth_wifi_current'] ?? '');
+?>
+<div class="row g-3 mt-1">
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-wifi me-2"></i>Booth WiFi</div>
+      <div class="card-body">
+        <p class="small text-muted mb-3">
+          Change the WiFi the booth connects to, without the Arduino IDE. The booth must be
+          <strong>online</strong> to receive it: change it here <em>first</em>, then change the
+          router or move the booth. It keeps its current WiFi as a fallback until the new one is in range.
+        </p>
+
+        <dl class="row small mb-3">
+          <dt class="col-5 text-muted fw-normal">Connected to now</dt>
+          <dd class="col-7 text-end fw-semibold" id="wifiNow"><?= $wifiNow !== '' ? e($wifiNow) : '<span class="text-muted fw-normal">Not reported yet</span>' ?></dd>
+          <?php if ($wifiVersion > 0): ?>
+            <dt class="col-5 text-muted fw-normal">Last sent</dt>
+            <dd class="col-7 text-end fw-semibold">
+              <?= e($wifiSent) ?>
+              <?php if ($wifiAdopted === (string) $wifiVersion): ?>
+                <span class="badge-soft granted ms-1">Received</span>
+              <?php else: ?>
+                <span class="badge-soft incomplete ms-1">Waiting for booth</span>
+              <?php endif; ?>
+            </dd>
+          <?php endif; ?>
+        </dl>
+
+        <form id="boothWifiForm" autocomplete="off">
+          <div class="mb-3">
+            <label class="form-label" for="wifi_ssid">New WiFi name</label>
+            <input type="text" class="form-control" id="wifi_ssid" name="wifi_ssid" maxlength="32" required
+                   value="<?= e($wifiSent) ?>" placeholder="e.g. FarmWiFi">
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="wifi_password">WiFi password</label>
+            <div class="input-group">
+              <input type="password" class="form-control" id="wifi_password" name="wifi_password"
+                     maxlength="63" autocomplete="new-password" placeholder="Leave empty for an open network">
+              <span class="input-group-text pw-toggle" data-target="wifi_password" role="button" title="Show password">
+                <i class="bi bi-eye"></i>
+              </span>
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary w-100" id="btnBoothWifi">
+            <i class="bi bi-send me-1"></i>Send to booth
+          </button>
+        </form>
+
+        <p class="small text-muted mt-3 mb-0">
+          <i class="bi bi-life-preserver me-1"></i>Booth already offline? It opens its own network
+          <strong>DisinfEntry-Setup</strong> after about 45 seconds. Join it from a phone and the
+          WiFi setup page opens (or go to <span class="font-monospace">http://192.168.4.1</span>).
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
 <?php require __DIR__ . '/includes/footer.php'; ?>

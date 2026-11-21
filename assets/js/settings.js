@@ -69,6 +69,34 @@
       }
     });
 
+    /* ---- Booth WiFi ---- */
+    $('#boothWifiForm').on('submit', async (ev) => {
+      ev.preventDefault();
+      const ssid = $('#wifi_ssid').val().trim();
+      if (!confirm(`Send WiFi "${ssid}" to the booth?\n\nThe booth must be online to receive it. It keeps its current WiFi as a fallback until "${ssid}" is in range.`)) return;
+
+      const fd = new FormData(ev.target);
+      fd.append('action', 'set_booth_wifi');
+
+      const btn = $('#btnBoothWifi');
+      btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm me-1"></span>Sending…');
+      try {
+        const res = await App.api('api/settings.php', { method: 'POST', body: fd });
+        App.toast(res.message, 'success');
+        setTimeout(() => window.location.reload(), 1200);
+      } catch (err) {
+        App.toast(err.message, 'danger');
+        btn.prop('disabled', false).html('<i class="bi bi-send me-1"></i>Send to booth');
+      }
+    });
+
+    $('.pw-toggle').on('click', function () {
+      const input = document.getElementById(this.dataset.target);
+      const show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      this.querySelector('i').className = show ? 'bi bi-eye-slash' : 'bi bi-eye';
+    });
+
     /* ---- API key ---- */
     $('#btnCopyKey').on('click', () => {
       const f = document.getElementById('apiKey');

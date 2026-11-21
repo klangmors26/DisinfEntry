@@ -1,8 +1,16 @@
 // Copy this file to secrets.h (same folder) and fill in your own values.
 // secrets.h is git-ignored; this example is the only one that is committed.
 
+// The FIRST WiFi the booth uses. To change WiFi later you do not need to re-upload:
+// when the booth cannot connect for ~45 s it opens its own network "DisinfEntry-Setup".
+// Join it from a phone, the setup page opens (or go to http://192.168.4.1), pick the new
+// WiFi and enter its password. It is saved on the booth and replaces these two values.
 const char* WIFI_SSID       = "your-wifi-name";
 const char* WIFI_PASSWORD   = "your-wifi-password";
+
+// Password of the "DisinfEntry-Setup" network (8+ characters). The default is
+// "disinfentry"; set your own so people near the booth cannot change its WiFi.
+// #define WIFI_SETUP_AP_PASSWORD "choose-a-password"
 
 // --- Local XAMPP server (used when SERVER_URL_VALUE below is NOT defined) ---
 // Windows computer name of the XAMPP machine, WITHOUT ".local" (run `hostname` in cmd).

@@ -201,6 +201,22 @@ $stmt->execute([
     $level,
 ]);
 
+/* ---- WiFi the booth is on, and which settings-page WiFi change it has adopted ----
+ * Firmware 1.6.0+ reports both on every sync; older firmware sends neither and these
+ * stay as they were. Stored as settings so System Settings can show "received". */
+if (isset($in['wifi_v']) && is_numeric($in['wifi_v'])) {
+    $adopted = (string) max(0, (int) $in['wifi_v']);
+    if ($adopted !== setting('booth_wifi_adopted_v', '')) {
+        set_setting('booth_wifi_adopted_v', $adopted);
+    }
+}
+if (isset($in['wifi_ssid_now']) && is_string($in['wifi_ssid_now'])) {
+    $onSsid = mb_substr($in['wifi_ssid_now'], 0, 32);
+    if ($onSsid !== setting('booth_wifi_current', '')) {
+        set_setting('booth_wifi_current', $onSsid);
+    }
+}
+
 /* ---- First sync after a reset ---- */
 if ($bootInfo !== null && $isNewBoot) {
     audit(
@@ -862,4 +878,4 @@ json_response([
         'temperature' => $tempStored,
         'config'      => $configReported,
     ],
-] + booth_directives(), 200);
+] + booth_directives() + booth_wifi_directive(), 200);

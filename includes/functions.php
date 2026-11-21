@@ -141,6 +141,29 @@ function booth_directives(): array
     return $out;
 }
 
+/**
+ * The WiFi network the booth should use, set from System Settings so changing it does not
+ * need the Arduino IDE. Sent ONLY in booth_sync.php's reply (authenticated by the API key),
+ * never to a browser. Hex-encoded so any SSID or password survives the booth's tiny
+ * key-scanning JSON reader. wifi_v identifies the change; the booth adopts a value once and
+ * reports wifi_v back, which is how the settings page knows it arrived.
+ */
+const BOOTH_WIFI_SECRET_KEYS = ['booth_wifi_pass'];
+
+function booth_wifi_directive(): array
+{
+    $version = (int) setting('booth_wifi_version', '0');
+    $ssid    = setting('booth_wifi_ssid', '');
+    if ($version <= 0 || $ssid === '') {
+        return [];
+    }
+    return [
+        'wifi_v'        => $version,
+        'wifi_ssid_hex' => bin2hex($ssid),
+        'wifi_pass_hex' => bin2hex(setting('booth_wifi_pass', '')),
+    ];
+}
+
 /* ============================================================
  * Output / formatting
  * ========================================================== */

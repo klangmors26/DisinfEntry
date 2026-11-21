@@ -4,7 +4,7 @@
 
   Detection: HC-SR04 ultrasonic distance sensor (50cm range)
   Safety: MLX90614 infrared temperature sensor
-    - If detected person's temperature is ABOVE the fever threshold, the pump and
+    - If detected person's temperature is >= the fever threshold, the pump and
       door sequence is BLOCKED (access denied, door stays closed).
     - System waits until the person leaves range before resetting.
 
@@ -54,6 +54,16 @@
     retry gap doubles (3 s up to 60 s) and the TLS handshake is time-limited, so
     even a dead server leaves the booth responsive.
 
+  Disinfectant tank level: a resistive water level sensor in the tank, read through
+    an ADC1 pin (so it keeps working while WiFi is on) and sent as "disinfectant_level"
+    (0-100 %). The server shows it on the live monitor and, when it falls to the low-level
+    warning in System Settings, notifies the owner in the app and by e-mail to refill.
+    Wiring:  sensor S (signal) -> GPIO35,  sensor + -> GPIO33,  sensor - -> GND.
+    The sensor's + comes from a GPIO, not 3V3, so it is powered only for the few
+    milliseconds of a reading; a resistive probe left energised in the chemical corrodes.
+    It is read only while the booth is IDLE, never during a spray (pump noise, sloshing).
+    Calibrate LEVEL_RAW_EMPTY / LEVEL_RAW_FULL below from the Serial log.
+
   IMPORTANT WIRING NOTE:
   HC-SR04 ECHO pin outputs 5V. ESP32 GPIOs are 3.3V only.
   You MUST use a voltage divider (e.g. 1k + 2k resistors) or a
@@ -80,6 +90,8 @@
 #include <WiFiClientSecure.h>   // TLS, for an https:// SERVER_URL
 #include <ESPmDNS.h>     // resolve the server by name, so a new DHCP lease costs nothing
 #include <Preferences.h>  // remember the address that worked, across reboots
+#include <WebServer.h>    // WiFi setup page served by the booth itself (no extra library)
+#include <DNSServer.h>    // captive portal: phones open the setup page automatically
 #include <esp_system.h>   // esp_random(), for the boot id
 #include <ESP32Servo.h>
 #include <Wire.h>
@@ -90,6 +102,20 @@
 // git-ignored. First time: copy secrets.example.h to secrets.h (same folder as this
 // file) and fill it in.
 #include "secrets.h"
+
+// ---------- WiFi setup portal (change WiFi without re-uploading) ----------
+// When the booth cannot join its WiFi for WIFI_SETUP_AFTER ms, it opens its own network
+// WIFI_SETUP_AP_NAME. Join it from a phone, the setup page opens (or browse to
+// http://192.168.4.1), pick the new WiFi and type its password. It is saved in flash
+// and used from then on; secrets.h only supplies the first default. The booth keeps
+// screening and spraying the whole time. Override the setup network's password in
+// secrets.h with  #define WIFI_SETUP_AP_PASSWORD "your-own-8+-char-password"
+#ifndef WIFI_SETUP_AP_PASSWORD
+  #define WIFI_SETUP_AP_PASSWORD "disinfentry"
+#endif
+const char*         WIFI_SETUP_AP_NAME  = "DisinfEntry-Setup";
+const unsigned long WIFI_SETUP_AFTER    = 45000;    // offline this long -> open the setup network
+const unsigned long WIFI_SETUP_LINGER   = 120000;   // after reconnecting, keep it up this long at most
 
 // ---------- Fixed server (Railway, or any hosted site) ----------
 // Optional. Define SERVER_URL_VALUE in secrets.h to talk to a fixed address instead of
@@ -142,7 +168,7 @@ const uint16_t SERVER_PORT  = 80;
 
 const char* DEVICE_ID    = "ESP32-BOOTH-01";
 const char* DEVICE_NAME   = "Main Gate Booth";
-const char* FIRMWARE      = "1.4.0";
+const char* FIRMWARE      = "1.6.0";
 
 // ---------- Pin configuration ----------
 const int TRIG_PIN   = 5;    // entry-side sensor (outside, where people get screened)
@@ -158,6 +184,12 @@ const int I2C_SCL    = 22;
 const int TRIG_EXIT_PIN = 27;
 const int ECHO_EXIT_PIN = 34;   // through voltage divider!
 
+// Disinfectant tank level sensor (resistive). GPIO35 is ADC1 and input-only; ADC2 pins
+// cannot be read while WiFi is running. The sensor's + is fed from LEVEL_POWER_PIN and is
+// switched on only while reading, to limit electrode corrosion.
+const int LEVEL_SENSOR_PIN = 35;
+const int LEVEL_POWER_PIN  = 33;
+
 const bool RELAY_ACTIVE_LOW = true;
 
 const int DOOR_CLOSED_ANGLE = 0;
@@ -167,7 +199,7 @@ const int DOOR_OPEN_ANGLE   = 90;
 // is silently ignored - while this value was still reported to the server as the booth's
 // configuration. Keep it within the real range so what is reported is what is used.
 const int SERVO_MIN_US = 1000;
-const int SERVO_MAX_US = 2500;
+const int SERVO_MAX_US = 3000;
 
 // ---------- Fixed detection settings ----------
 const unsigned long ULTRASONIC_TIMEOUT_US = 25000;
@@ -185,6 +217,32 @@ const float         EXIT_DETECTION_CM = 50.0;
 // Short on purpose - someone leaving should not stand and wait - but long enough
 // that a single stray echo cannot swing the door open.
 const unsigned long EXIT_CONFIRM_TIME = 400;
+
+// ---------- Tank level sensor calibration ----------
+// Raw ADC counts (0-4095) the sensor gives with the probe dry and with the tank full. To
+// measure them, watch the Serial Monitor line "Disinfectant tank: NN% (raw XXXX)": note the
+// raw value with the probe out of the liquid (LEVEL_RAW_EMPTY) and with it submerged to the
+// full mark (LEVEL_RAW_FULL), then enter both here and reflash. A resistive sensor reads
+// HIGHER the wetter it is, so FULL is normally larger than EMPTY; if yours is the other
+// way round, the same formula works with the values swapped. The defaults are a starting
+// guess, not a calibration.
+const int LEVEL_RAW_EMPTY = 300;
+const int LEVEL_RAW_FULL  = 2200;
+const unsigned long LEVEL_READ_INTERVAL  = 5000;   // ms between readings (IDLE only)
+const unsigned long LEVEL_PRINT_INTERVAL = 10000;  // ms between Serial lines
+const int           LEVEL_SAMPLES        = 8;      // ADC reads averaged into one raw value
+const int           LEVEL_SETTLE_MS      = 20;     // after powering the sensor, before reading
+const int           LEVEL_MEDIAN_COUNT   = 5;      // readings kept; the median ignores sloshing
+// A disconnected or broken sensor must not read as "empty" and raise a refill alert. A
+// reading is rejected as a sensor fault when the raw value is outside
+// [LEVEL_RAW_FAULT_LOW, LEVEL_RAW_FAULT_HIGH] (an open wire reads near 0, a short near 4095)
+// or when the samples within one reading disagree by more than LEVEL_MAX_SPREAD (a floating
+// pin is noise). Keep LEVEL_RAW_FAULT_LOW below LEVEL_RAW_EMPTY, which a dry probe legitimately
+// reads. After LEVEL_FAULT_READS faults in a row the level is no longer reported at all.
+const int LEVEL_RAW_FAULT_LOW  = 50;
+const int LEVEL_RAW_FAULT_HIGH = 4050;
+const int LEVEL_MAX_SPREAD     = 400;
+const int LEVEL_FAULT_READS    = 3;
 
 // ---------- Fixed timing (all in milliseconds) ----------
 const unsigned long PRESENCE_GLITCH_GRACE = 500;
@@ -315,6 +373,16 @@ bool          exitAwaitClear = false; // exit sensor must read clear before it c
 uint32_t      exitCount = 0;          // serial log only
 bool          exitForcedClose = false;
 
+// ---------- Tank level state ----------
+int           levelPercent = -1;        // -1 = no valid reading yet; never sent to the server
+int           levelHistory[LEVEL_MEDIAN_COUNT];
+int           levelHistoryCount = 0;
+int           levelHistoryNext = 0;
+int           levelFaults = 0;          // consecutive rejected readings
+unsigned long lastLevelRead = 0;
+unsigned long lastLevelPrint = 0;
+bool          levelReadOnce = false;
+
 // ---------- Sync state ----------
 String bootId;                    // new on every reset; scopes every uptime_ms
 bool   mlxOk = true;
@@ -330,6 +398,29 @@ uint32_t droppedExits = 0;
 enum DiscoveryPhase { DISC_REMEMBERED, DISC_MDNS, DISC_SWEEP };
 
 Preferences     prefs;                 // NVS: survives a reset, so the search runs once
+
+// ---------- WiFi credentials + setup portal state ----------
+String        wifiSsid;                // from NVS when set through the setup page, else secrets.h
+String        wifiPass;
+WebServer     setupServer(80);
+DNSServer     setupDns;
+bool          setupOn = false;
+bool          setupRoutes = false;
+unsigned long wifiDownSince = 0;       // 0 = connected (or not yet measured)
+unsigned long wifiUpSince = 0;
+
+// WiFi sent from System Settings on the website. The previous network is kept as a
+// fallback, so sending a network the booth cannot see yet (the site it is moving to)
+// never strands it: it stays on the old one and switches once the new one is in range.
+String        wifiBackupSsid;
+String        wifiBackupPass;
+uint32_t      wifiAdoptedV = 0;        // last website WiFi change applied (reported back)
+bool          wifiSwitchPending = false;
+uint8_t       wifiAttempt = 0;         // retries alternate new / previous network
+bool          wifiProbeRunning = false;
+bool          wifiProbeNow = false;
+unsigned long lastPrimaryProbe = 0;
+const unsigned long WIFI_PRIMARY_PROBE_MS = 300000;   // on the fallback: look for the new one every 5 min
 
 // ---------- Sync targets ----------
 // One per server the booth reports to: [0] the hosted server (SERVER_URL_VALUE), [1] the
@@ -825,6 +916,14 @@ String buildPayload(const SyncTarget& t) {
   p += ",\"firmware\":\"" + String(FIRMWARE) + "\"";
   p += ",\"uptime_ms\":" + String(millis());
   p += ",\"state\":\"" + String(stateName(currentState)) + "\"";
+  // Lets System Settings show which WiFi the booth is on and whether a change arrived.
+  p += ",\"wifi_v\":" + String(wifiAdoptedV);
+  p += ",\"wifi_ssid_now\":\"" + jsonEscape(WiFi.SSID().c_str()) + "\"";
+
+  // Omitted - never sent as 0 - until a reading exists: the server keeps its last value.
+  if (levelPercent >= 0) {
+    p += ",\"disinfectant_level\":" + String(levelPercent);
+  }
 
   if (!t.bootReported) {
     p += ",\"boot\":{\"mlx_ok\":";
@@ -978,10 +1077,59 @@ void wifiEnsure(unsigned long now) {
   static unsigned long lastAttempt = 0;
   static bool announced = false;
 
+  // New credentials (setup page, or the website when the new network is in range).
+  if (wifiSwitchPending) {
+    wifiSwitchPending = false;
+    wifiAttempt = 0;
+    announced = false;
+    lastAttempt = now;
+    Serial.print(">> Switching WiFi to '");
+    Serial.print(wifiSsid);
+    Serial.println("'...");
+    WiFi.disconnect();
+    WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
+    return;
+  }
+
   if (WiFi.status() == WL_CONNECTED) {
+    // On the fallback network: every few minutes (or right after the website sent a new
+    // network) scan in the background, and move over only once the new one is in range.
+    if (!setupOn && wifiBackupSsid.length() && WiFi.SSID() != wifiSsid) {
+      if (!wifiProbeRunning && (wifiProbeNow || now - lastPrimaryProbe >= WIFI_PRIMARY_PROBE_MS)) {
+        wifiProbeNow = false;
+        lastPrimaryProbe = now;
+        WiFi.scanDelete();
+        wifiProbeRunning = WiFi.scanNetworks(true) == WIFI_SCAN_RUNNING;
+      } else if (wifiProbeRunning) {
+        const int n = WiFi.scanComplete();
+        if (n != WIFI_SCAN_RUNNING) {
+          wifiProbeRunning = false;
+          bool seen = false;
+          for (int i = 0; i < n; i++) {
+            if (WiFi.SSID(i) == wifiSsid) { seen = true; break; }
+          }
+          WiFi.scanDelete();
+          if (seen) {
+            Serial.print(">> New WiFi '");
+            Serial.print(wifiSsid);
+            Serial.println("' is in range.");
+            wifiSwitchPending = true;
+          } else {
+            Serial.print(">> New WiFi '");
+            Serial.print(wifiSsid);
+            Serial.print("' not in range yet; staying on '");
+            Serial.print(WiFi.SSID());
+            Serial.println("'.");
+          }
+        }
+      }
+    }
+
     if (!announced) {
       announced = true;
-      Serial.print(">> WiFi connected. IP ");
+      Serial.print(">> WiFi connected to '");
+      Serial.print(WiFi.SSID());
+      Serial.print("'. IP ");
       Serial.println(WiFi.localIP());
 
       // mDNS needs an interface that is actually up, so it starts here rather
@@ -1005,12 +1153,308 @@ void wifiEnsure(unsigned long now) {
   }
 
   announced = false;
+  // A reconnect attempt makes the radio hop channels, which drops a phone that is on the
+  // setup network. Hold off while someone is using it; saving new credentials reconnects.
+  if (setupOn && WiFi.softAPgetStationNum() > 0) return;
   if (now - lastAttempt < WIFI_RETRY_INTERVAL) return;
   lastAttempt = now;
 
-  Serial.println("!! WiFi not connected. Retrying...");
+  // With a fallback saved, alternate: new network, previous network, new, ...
+  const bool useBackup = wifiBackupSsid.length() && (wifiAttempt++ % 2 == 1);
+  const String& ssid = useBackup ? wifiBackupSsid : wifiSsid;
+  const String& pass = useBackup ? wifiBackupPass : wifiPass;
+
+  Serial.print("!! WiFi not connected. Trying '");
+  Serial.print(ssid);
+  Serial.println(useBackup ? "' (previous network)..." : "'...");
   WiFi.disconnect();
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.begin(ssid.c_str(), pass.c_str());
+}
+
+/**
+ * Makes (ssid, pass) the booth's WiFi and keeps the network it replaces as the fallback.
+ * Saved in NVS, so it survives a reboot and no re-upload is needed. Returns false when
+ * nothing changed.
+ */
+bool applyWifiCredentials(const String& ssid, const String& pass) {
+  if (ssid == wifiSsid && pass == wifiPass) return false;
+  if (ssid != wifiSsid) {          // re-sending a new password for the same network keeps the old fallback
+    wifiBackupSsid = wifiSsid;
+    wifiBackupPass = wifiPass;
+    prefs.putString("wifi_bssid", wifiBackupSsid);
+    prefs.putString("wifi_bpass", wifiBackupPass);
+  }
+  wifiSsid = ssid;
+  wifiPass = pass;
+  prefs.putString("wifi_ssid", wifiSsid);
+  prefs.putString("wifi_pass", wifiPass);
+  return true;
+}
+
+/** Reads an unsigned integer field exactly (jsonNumber's float loses precision above 2^24). */
+bool jsonUInt(const String& src, const char* key, uint32_t& out) {
+  const String needle = String("\"") + key + "\":";
+  int at = src.indexOf(needle);
+  if (at < 0) return false;
+  at += needle.length();
+  while (at < (int) src.length() && src[at] == ' ') at++;
+  int end = at;
+  while (end < (int) src.length() && src[end] >= '0' && src[end] <= '9') end++;
+  if (end == at || end - at > 10) return false;
+  out = (uint32_t) strtoul(src.substring(at, end).c_str(), nullptr, 10);
+  return true;
+}
+
+/** Reads a hex-encoded string field ("6869" -> "hi"). Any SSID or password survives intact. */
+bool jsonHex(const String& src, const char* key, String& out) {
+  const String needle = String("\"") + key + "\":\"";
+  int at = src.indexOf(needle);
+  if (at < 0) return false;
+  at += needle.length();
+  const int end = src.indexOf('"', at);
+  if (end < 0 || (end - at) % 2 != 0 || end - at > 200) return false;
+  out = "";
+  for (int i = at; i < end; i += 2) {
+    char buf[3] = { src[i], src[i + 1], 0 };
+    char* stop = nullptr;
+    const long v = strtol(buf, &stop, 16);
+    if (*stop != 0) return false;
+    out += (char) v;
+  }
+  return true;
+}
+
+/**
+ * WiFi sent from System Settings on the website (booth_sync.php: wifi_v, wifi_ssid_hex,
+ * wifi_pass_hex). Applied once per wifi_v. While the booth is online it does not jump
+ * blindly: a background scan decides, so a network that is not in range yet leaves it
+ * where it is.
+ */
+void adoptWifiDirective(const String& body) {
+  uint32_t v = 0;
+  if (!jsonUInt(body, "wifi_v", v) || v == 0 || v == wifiAdoptedV) return;
+
+  String ssid, pass;
+  if (!jsonHex(body, "wifi_ssid_hex", ssid) || ssid.length() == 0 || ssid.length() > 32 ||
+      !jsonHex(body, "wifi_pass_hex", pass) ||
+      (pass.length() > 0 && (pass.length() < 8 || pass.length() > 63))) {
+    Serial.println("!! Ignoring an invalid WiFi setting from the server.");
+    return;
+  }
+
+  wifiAdoptedV = v;
+  prefs.putULong("wifi_v", v);    // reported back as "received" on every sync from now on
+
+  if (!applyWifiCredentials(ssid, pass)) {
+    Serial.println(">> Website WiFi setting matches the current one.");
+    return;
+  }
+  Serial.print(">> New WiFi from the website: '");
+  Serial.print(ssid);
+  Serial.println("'. Saved; checking whether it is in range...");
+  wifiProbeNow = true;            // wifiEnsure() scans, then switches only if it is there
+}
+
+/* ============================================================
+ * WiFi setup portal
+ *
+ * Changing WiFi used to mean editing secrets.h and re-uploading. Now, when the booth
+ * has been offline for WIFI_SETUP_AFTER, it also opens its own access point
+ * (WIFI_SETUP_AP_NAME). A phone that joins it is sent to a small page listing nearby
+ * networks; the chosen SSID and password are saved in NVS and used from then on.
+ *
+ * Everything here is non-blocking (handleClient / processNextRequest return at once),
+ * and the station keeps retrying in WIFI_AP_STA mode, so screening, spraying and the
+ * door never wait on it. The access point closes again once the booth is back online.
+ * ========================================================== */
+
+void loadWifiCredentials() {
+  wifiAdoptedV   = prefs.getULong("wifi_v", 0);
+  wifiBackupSsid = prefs.getString("wifi_bssid", "");
+  wifiBackupPass = prefs.getString("wifi_bpass", "");
+  wifiSsid = prefs.getString("wifi_ssid", "");
+  wifiPass = prefs.getString("wifi_pass", "");
+  if (wifiSsid.length()) {
+    Serial.print("WiFi: '");
+    Serial.print(wifiSsid);
+    Serial.println("' (saved from the setup page)");
+  } else {
+    wifiSsid = WIFI_SSID;
+    wifiPass = WIFI_PASSWORD;
+    Serial.print("WiFi: '");
+    Serial.print(wifiSsid);
+    Serial.println("' (from secrets.h)");
+  }
+}
+
+String htmlEscape(const String& s) {
+  String o;
+  o.reserve(s.length() + 8);
+  for (size_t i = 0; i < s.length(); i++) {
+    const char c = s[i];
+    if (c == '&') o += "&amp;";
+    else if (c == '<') o += "&lt;";
+    else if (c == '>') o += "&gt;";
+    else if (c == '"') o += "&quot;";
+    else o += c;
+  }
+  return o;
+}
+
+String setupPage(const String& notice) {
+  String h;
+  h.reserve(3500);
+  h += F("<!DOCTYPE html><html><head><meta charset='utf-8'>"
+         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+         "<title>DisinfEntry Booth WiFi</title><style>"
+         "body{margin:0;font-family:system-ui,sans-serif;background:#f1f4f7;color:#1e293b}"
+         "header{background:#0d7a5f;color:#fff;padding:18px 16px;font-weight:700;font-size:1.1rem}"
+         "main{padding:16px;max-width:460px;margin:auto}"
+         ".card{background:#fff;border-radius:16px;padding:16px;margin-bottom:14px}"
+         "label{display:block;font-weight:600;font-size:.85rem;margin:12px 0 6px}"
+         "input,select{width:100%;box-sizing:border-box;font-size:16px;padding:12px;border:1px solid #d8dee9;border-radius:12px}"
+         "button{width:100%;margin-top:16px;padding:14px;border:0;border-radius:12px;background:#0d7a5f;color:#fff;font-size:1rem;font-weight:700}"
+         ".muted{color:#64748b;font-size:.85rem}.ok{background:#dcfce7;color:#166534}.warn{background:#fef3c7;color:#92400e}"
+         "a{color:#0d7a5f;font-weight:600}</style></head><body>"
+         "<header>DisinfEntry Booth &middot; WiFi setup</header><main>");
+  if (notice.length()) h += notice;
+
+  h += F("<div class='card'><div class='muted'>Status</div><b>");
+  if (WiFi.status() == WL_CONNECTED) {
+    h += "Online on '" + htmlEscape(WiFi.SSID()) + "' (" + WiFi.localIP().toString() + ")";
+  } else {
+    h += "Offline - trying '" + htmlEscape(wifiSsid) + "'";
+  }
+  h += F("</b></div>");
+
+  h += F("<form class='card' method='post' action='/save'>"
+         "<label for='ssid'>WiFi network</label>"
+         "<input id='ssid' name='ssid' list='nets' maxlength='32' required autocomplete='off' value='");
+  h += htmlEscape(wifiSsid);
+  h += F("'><datalist id='nets'>");
+  const int n = WiFi.scanComplete();
+  if (n >= 0) {
+    for (int i = 0; i < n; i++) {
+      h += "<option value=\"" + htmlEscape(WiFi.SSID(i)) + "\">" + String(WiFi.RSSI(i)) + " dBm</option>";
+    }
+  }
+  h += F("</datalist><div class='muted' style='margin-top:6px'>");
+  if (n > 0) {
+    h += String(n) + F(" networks nearby - tap the box to pick one. ");
+  } else if (n == WIFI_SCAN_RUNNING) {
+    h += F("Searching for networks... ");
+  } else {
+    h += F("No networks found yet. ");
+  }
+  h += F("<a href='/?scan=1'>Scan again</a></div>"
+         "<label for='pass'>Password</label>"
+         "<input id='pass' name='pass' type='password' maxlength='63' autocomplete='off' placeholder='Leave empty for an open network'>"
+         "<button type='submit'>Save and connect</button></form>"
+         "<p class='muted'>The booth keeps screening and disinfecting while you do this. "
+         "This setup network closes by itself once the booth is back online.</p>"
+         "</main></body></html>");
+  return h;
+}
+
+void setupHandleRoot() {
+  // Start (or restart) a background scan; the list shows on the next page load.
+  if (setupServer.hasArg("scan") || WiFi.scanComplete() == WIFI_SCAN_FAILED) {
+    WiFi.scanDelete();
+    WiFi.scanNetworks(true);
+  }
+  setupServer.sendHeader("Cache-Control", "no-store");
+  setupServer.send(200, "text/html; charset=utf-8", setupPage(""));
+}
+
+void setupHandleSave() {
+  String ssid = setupServer.arg("ssid");
+  String pass = setupServer.arg("pass");
+  ssid.trim();
+
+  String error;
+  if (ssid.length() == 0 || ssid.length() > 32) error = "Enter the WiFi name (1-32 characters).";
+  else if (pass.length() > 0 && (pass.length() < 8 || pass.length() > 63)) error = "A WiFi password is 8-63 characters (or empty for an open network).";
+
+  if (error.length()) {
+    setupServer.send(400, "text/html; charset=utf-8",
+                     setupPage("<div class='card warn'>" + htmlEscape(error) + "</div>"));
+    return;
+  }
+
+  applyWifiCredentials(ssid, pass);
+  wifiSwitchPending = true;       // wifiEnsure() reconnects after this response has gone out
+
+  Serial.print(">> WiFi changed from the setup page: '");
+  Serial.print(ssid);
+  Serial.println("'. Saved; connecting...");
+
+  setupServer.send(200, "text/html; charset=utf-8",
+                   setupPage("<div class='card ok'><b>Saved.</b> Connecting to '" + htmlEscape(ssid) +
+                             "'... Reload this page in about 20 seconds to see the result.</div>"));
+}
+
+void setupRedirect() {
+  // Every other URL (phones' captive-portal checks included) lands on the setup page.
+  setupServer.sendHeader("Location", "http://" + WiFi.softAPIP().toString() + "/", true);
+  setupServer.send(302, "text/plain", "");
+}
+
+void startSetupPortal() {
+  WiFi.mode(WIFI_AP_STA);         // keep the station side retrying
+  if (!WiFi.softAP(WIFI_SETUP_AP_NAME, WIFI_SETUP_AP_PASSWORD)) {
+    Serial.println("!! Could not open the WiFi setup network.");
+    return;
+  }
+  setupDns.start(53, "*", WiFi.softAPIP());
+  if (!setupRoutes) {
+    setupServer.on("/", HTTP_GET, setupHandleRoot);
+    setupServer.on("/save", HTTP_POST, setupHandleSave);
+    setupServer.onNotFound(setupRedirect);
+    setupRoutes = true;
+  }
+  setupServer.begin();
+  WiFi.scanNetworks(true);
+  setupOn = true;
+
+  Serial.println("==================================================");
+  Serial.print(">> WiFi SETUP open. On a phone, join '");
+  Serial.print(WIFI_SETUP_AP_NAME);
+  Serial.print("' (password ");
+  Serial.print(WIFI_SETUP_AP_PASSWORD);
+  Serial.println(")");
+  Serial.print("   then open http://");
+  Serial.println(WiFi.softAPIP());
+  Serial.println("==================================================");
+}
+
+void stopSetupPortal() {
+  setupServer.stop();
+  setupDns.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  setupOn = false;
+  Serial.println(">> WiFi setup network closed (booth is online).");
+}
+
+void setupPortalLoop(unsigned long now) {
+  const bool online = WiFi.status() == WL_CONNECTED;
+
+  if (online) {
+    wifiDownSince = 0;
+    if (!wifiUpSince) wifiUpSince = now ? now : 1;
+    // Close once nobody is on it, or after WIFI_SETUP_LINGER regardless.
+    if (setupOn && (WiFi.softAPgetStationNum() == 0 || now - wifiUpSince >= WIFI_SETUP_LINGER)) {
+      stopSetupPortal();
+    }
+  } else {
+    wifiUpSince = 0;
+    if (!wifiDownSince) wifiDownSince = now ? now : 1;
+    if (!setupOn && now - wifiDownSince >= WIFI_SETUP_AFTER) startSetupPortal();
+  }
+
+  if (!setupOn) return;
+  setupDns.processNextRequest();
+  setupServer.handleClient();
 }
 
 /* ============================================================
@@ -1314,7 +1758,10 @@ bool syncNow(SyncTarget& t) {
 
   // Settings come from one server only, or two servers with different values would flip the
   // booth back and forth on every sync.
-  if (isPrimary(t)) adoptDirectives(body);
+  if (isPrimary(t)) {
+    adoptDirectives(body);
+    adoptWifiDirective(body);
+  }
   return true;
 }
 
@@ -1414,6 +1861,10 @@ void setup() {
   pinMode(ECHO_PIN, INPUT);
   pinMode(TRIG_EXIT_PIN, OUTPUT);
   pinMode(ECHO_EXIT_PIN, INPUT);
+  pinMode(LEVEL_POWER_PIN, OUTPUT);
+  digitalWrite(LEVEL_POWER_PIN, LOW);            // sensor off until a reading
+  pinMode(LEVEL_SENSOR_PIN, INPUT);
+  analogSetPinAttenuation(LEVEL_SENSOR_PIN, ADC_11db);   // full 0-3.3 V range
   digitalWrite(TRIG_PIN, LOW);
   digitalWrite(TRIG_EXIT_PIN, LOW);
   setRelay(false);   // relay pin was already made an output, OFF, at the top of setup()
@@ -1437,9 +1888,10 @@ void setup() {
 
   // Non-blocking: the state machine must start running immediately, with or
   // without a network. Detection and screening never depend on the server.
+  loadWifiCredentials();
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
 
   Serial.print("Smart Disinfectant ready. Boot ");
   Serial.println(bootId);
@@ -1498,11 +1950,83 @@ void printLinkStatus(unsigned long now) {
   Serial.println(" cycle(s) - sensors keep running locally");
 }
 
+/**
+ * Reads the tank level and keeps the median of the last few readings, so a slosh does not
+ * swing the reported value. Only while IDLE: a spray burst adds electrical noise and sets
+ * the liquid moving. The first reading is taken as soon as the booth is idle after boot.
+ * Reports nothing and blocks for ~LEVEL_SETTLE_MS + a few ms, only when a reading is due.
+ */
+void updateDisinfectantLevel(unsigned long now) {
+  if (currentState != IDLE) return;
+  if (levelReadOnce && now - lastLevelRead < LEVEL_READ_INTERVAL) return;
+  lastLevelRead = now;
+  levelReadOnce = true;
+
+  digitalWrite(LEVEL_POWER_PIN, HIGH);
+  delay(LEVEL_SETTLE_MS);
+  long sum = 0;
+  int lo = 4095, hi = 0;
+  for (int i = 0; i < LEVEL_SAMPLES; i++) {
+    const int v = analogRead(LEVEL_SENSOR_PIN);
+    sum += v;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  digitalWrite(LEVEL_POWER_PIN, LOW);
+  const int raw = (int) (sum / LEVEL_SAMPLES);
+
+  // Not a believable reading (sensor unplugged, shorted or noisy): never turn it into a level.
+  if (raw < LEVEL_RAW_FAULT_LOW || raw > LEVEL_RAW_FAULT_HIGH || hi - lo > LEVEL_MAX_SPREAD) {
+    if (++levelFaults >= LEVEL_FAULT_READS && levelPercent >= 0) {
+      levelPercent = -1;            // stop reporting: the server keeps its last value
+      levelHistoryCount = 0;
+      levelHistoryNext = 0;
+    }
+    if (now - lastLevelPrint >= LEVEL_PRINT_INTERVAL || lastLevelPrint == 0) {
+      lastLevelPrint = now;
+      Serial.print("Disinfectant tank: SENSOR FAULT - check the wiring (raw ");
+      Serial.print(raw);
+      Serial.print(", spread ");
+      Serial.print(hi - lo);
+      Serial.println(")");
+    }
+    return;
+  }
+  levelFaults = 0;
+
+  long pct = (long) (raw - LEVEL_RAW_EMPTY) * 100L / (LEVEL_RAW_FULL - LEVEL_RAW_EMPTY);
+  pct = constrain(pct, 0L, 100L);
+
+  levelHistory[levelHistoryNext] = (int) pct;
+  levelHistoryNext = (levelHistoryNext + 1) % LEVEL_MEDIAN_COUNT;
+  if (levelHistoryCount < LEVEL_MEDIAN_COUNT) levelHistoryCount++;
+
+  int sorted[LEVEL_MEDIAN_COUNT];
+  for (int i = 0; i < levelHistoryCount; i++) sorted[i] = levelHistory[i];
+  for (int i = 1; i < levelHistoryCount; i++) {        // insertion sort, five elements at most
+    int v = sorted[i], j = i - 1;
+    while (j >= 0 && sorted[j] > v) { sorted[j + 1] = sorted[j]; j--; }
+    sorted[j + 1] = v;
+  }
+  levelPercent = sorted[levelHistoryCount / 2];
+
+  if (now - lastLevelPrint >= LEVEL_PRINT_INTERVAL || lastLevelPrint == 0) {
+    lastLevelPrint = now;
+    Serial.print("Disinfectant tank: ");
+    Serial.print(levelPercent);
+    Serial.print("% (raw ");
+    Serial.print(raw);
+    Serial.println(")");
+  }
+}
+
 void loop() {
   unsigned long now = millis();
 
   wifiEnsure(now);
+  setupPortalLoop(now);
   printLinkStatus(now);
+  updateDisinfectantLevel(now);
 
   // ---- Distance sampling ----
   // One sensor per pass, alternating, so neither hears the other's ping.
@@ -1695,11 +2219,7 @@ void loop() {
             Serial.println(">> ACCESS DENIED: Temperature reading failed. Check the MLX90614.");
             stateStartTime = now;
             setState(ACCESS_DENIED, now);
-          } else if (lround(objTemp * 10.0) > lround(feverThresholdC * 10.0)) {
-            // Compared in whole tenths of a degree, the same resolution the server stores and
-            // displays: a reading AT or BELOW the threshold (e.g. 37.8 C) is granted, and only a
-            // reading ABOVE it is denied. (Raw float comparison would deny a reading that the
-            // dashboard then shows as exactly 37.8 C.)
+          } else if (objTemp >= feverThresholdC) {
             screeningFailed = false;
             Serial.println(">> ACCESS DENIED: Temperature too high. Pump and door blocked.");
             stateStartTime = now;
